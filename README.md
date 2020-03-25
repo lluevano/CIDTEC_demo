@@ -1,5 +1,4 @@
-# CIDTEC_demo
-Demos para CIDTEC 2020
+Demos for the Computer Vision Lab at Tec de Monterrey
 
 - Object Tracking
 - Face detection
