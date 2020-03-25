@@ -93,6 +93,7 @@ class CameraViewer(QMainWindow):
     def toggleSave(self):
         if self.saving_capture:
             self.saving_capture=False
+            self.counter = 0
         else:
             self.saving_capture=True
             self.enrollDatabase()
@@ -147,50 +148,51 @@ class CameraViewer(QMainWindow):
             cv2.rectangle(im_bgr,(bbox_int[face_idx][0], bbox_int[face_idx][1]),(bbox_int[face_idx][2],bbox_int[face_idx][3]),(255,0,0),2)
             
             
-            if (self.saving_capture):
-                
-                face = im_bgr[bbox_int[face_idx][1]:bbox_int[face_idx][3],bbox_int[face_idx][0]:bbox_int[face_idx][2],:]
+            
+            face = im_bgr[bbox_int[face_idx][1]:bbox_int[face_idx][3],bbox_int[face_idx][0]:bbox_int[face_idx][2],:]
+            try:
                 resized_face = cv2.resize(face, (112,112),interpolation=cv2.INTER_AREA)
+            except:
+                print("Resize error, continuing,")
+                continue
+            ratio_width = 112.0/float(np.shape(face)[1])
+            ratio_height = 112.0/float(np.shape(face)[0])
                 
-                ratio_width = 112.0/float(np.shape(face)[1])
-                ratio_height = 112.0/float(np.shape(face)[0])
-                
-                cropped_landmarks = copy.deepcopy(landmark_int[face_idx,:,:])
-                cropped_landmarks[:,0] = cropped_landmarks[:,0] - min(bbox_int[face_idx][0],bbox_int[face_idx][2])
-                cropped_landmarks[:,1] = cropped_landmarks[:,1] - min(bbox_int[face_idx][1],bbox_int[face_idx][3])
+            cropped_landmarks = copy.deepcopy(landmark_int[face_idx,:,:])
+            cropped_landmarks[:,0] = cropped_landmarks[:,0] - min(bbox_int[face_idx][0],bbox_int[face_idx][2])
+            cropped_landmarks[:,1] = cropped_landmarks[:,1] - min(bbox_int[face_idx][1],bbox_int[face_idx][3])
                 
                 
-                resized_landmarks[face_idx,:,0] = (cropped_landmarks[:,0]*ratio_width).astype(np.int)
-                resized_landmarks[face_idx,:,1] = (cropped_landmarks[:,1]*ratio_height).astype(np.int)
+            resized_landmarks[face_idx,:,0] = (cropped_landmarks[:,0]*ratio_width).astype(np.int)
+            resized_landmarks[face_idx,:,1] = (cropped_landmarks[:,1]*ratio_height).astype(np.int)
                 
                 
                 #for lmk in range(5):
                 #    face = cv2.circle(face,(cropped_landmarks[lmk,0],cropped_landmarks[lmk,1]),10,(0,255,0),2)
                 #    resized_face = cv2.circle(resized_face,(resized_landmarks[face_idx,lmk,0],resized_landmarks[face_idx,lmk,1]),10,(0,255,0),2)
                     
-                aligned_face = insightface.utils.face_align.norm_crop(resized_face,resized_landmarks[face_idx,:,:])
+            aligned_face = insightface.utils.face_align.norm_crop(resized_face,resized_landmarks[face_idx,:,:])
                 
-                im_tensor = np.zeros((1, 3, aligned_face.shape[0], aligned_face.shape[1]))
-                for i in range(3):
-                    im_tensor[0, i, :, :] = aligned_face[:, :, 2 - i]
+            im_tensor = np.zeros((1, 3, aligned_face.shape[0], aligned_face.shape[1]))
+            for i in range(3):
+                im_tensor[0, i, :, :] = aligned_face[:, :, 2 - i]
                 
-                data = mx.ndarray.array(im_tensor)
-                db = mx.io.DataBatch(data=(data,), provide_data=[('data', data.shape)])
-                model_fr.forward(db, is_train=False)
+            data = mx.ndarray.array(im_tensor)
+            db = mx.io.DataBatch(data=(data,), provide_data=[('data', data.shape)])
+            model_fr.forward(db, is_train=False)
                        
-                # Normalise embedding obtained from forward pass to unit vector
-                embedding = model_fr.get_outputs()[0].squeeze()
-                embedding /= embedding.norm()
-                sim = np.dot(embedding.asnumpy(), test_embedding.asnumpy().T)
+            # Normalise embedding obtained from forward pass to unit vector
+            embedding = model_fr.get_outputs()[0].squeeze()
+            embedding /= embedding.norm()
+            sim = np.dot(embedding.asnumpy(), test_embedding.asnumpy().T)
                 
-                if sim>0.5:
-                    cv2.putText(im_bgr, 'Luis Santiago '+str(sim), (bbox_int[face_idx,0],bbox_int[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA) 
-                
-                cv2.imwrite('./images/'+str(self.counter)+'.jpg',face)
+            if sim>0.5:
+                cv2.putText(im_bgr, 'Luis Santiago '+str(sim), (bbox_int[face_idx,0],bbox_int[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA) 
+                #print(sim)
+            if (self.saving_capture):
+                cv2.imwrite(os.path.join('images',str(num_subjects),str(self.counter)+'.jpg'),face)
                 cv2.imwrite('./images/resized_'+str(self.counter)+'.jpg',resized_face)
-                cv2.imwrite('./images/resized_aligned_'+str(self.counter)+'.jpg',aligned_face)
-                print(sim)
-                
+                cv2.imwrite('./images/resized_aligned_'+str(self.counter)+'.jpg',aligned_face)    
                 self.counter+=1
                 if (self.counter==30):
                     self.toggleSave()
