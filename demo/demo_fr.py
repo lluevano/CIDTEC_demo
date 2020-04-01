@@ -19,34 +19,137 @@ import mxnet as mx
 import pickle
 
 cap = cv2.VideoCapture(0)
-face_cascade = cv2.CascadeClassifier('/home/lusantlueg/anaconda3/lib/python3.7/site-packages/cv2/data/haarcascade_frontalface_default.xml')
 num_subjects = 0
 
-#load face detection model
-#model = insightface.model_zoo.get_model('retinaface_r50_v1')
-model = insightface.model_zoo.get_model('retinaface_mnet025_v2')
-model.prepare(ctx_id = -1, nms=0.4) #ctx_id 0 for gpu and -1 for cpu
-
-#load face recognition model
-sym, arg_params, aux_params = mx.model.load_checkpoint('./models/shufflev2-1.5-arcface-retina/model', 42)
-model_fr = mx.mod.Module(symbol=sym, context=[mx.cpu()], label_names = None)
-model_fr.bind(data_shapes=[('data', (1, 3, 112,112))])
-model_fr.set_params(arg_params,aux_params)
-
 #load database
-test_embedding = 0
-with open('test.embedding', 'rb') as test_emb_file:
-    test_embedding = pickle.load(test_emb_file)
 
-print(test_embedding)
+with open('test_database.pickle', 'rb') as test_emb_file:
+    identity_vectors = pickle.load(test_emb_file)
+
+with open('labels.pickle', 'rb') as label_file:
+    labels = pickle.load(label_file)
+
+print(identity_vectors)
+print(labels)
+
+class FRP: #Face Recognition Pipeline
+    #define constants for face detection algorithms
+    DETECT_HAAR = 0
+    DETECT_MOBILE_R50 = 1
+    
+    #define constants for alignment
+    ALIGN_INSIGHTFACE = 0
+    ALIGNMENT_RESOLUTION = 112.0
+    
+    #define constants for face recognition algorithms
+    RECOGNITION_SHUFFLEFACENET = 0
+    
+    
+    def __init__(self, use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm):
+        #PREPARE USE CPU OR GPU
+        assert isinstance(use_gpu,bool)
+        self.use_gpu = -1 if use_gpu==False else 0
+        
+        #LOAD DETECTION MODEL
+        self.active_detection_model = detection_algorithm #algorithm number
+        self.detection_model = self.prepare_detection(self.active_detection_model) #model object
+        
+        #SET ALIGNNMENT METHOD
+        self.active_alignment_method = alignment_algorithm
+        
+        #LOAD RECOGNITION MODEL
+        self.active_recognition_model = recognition_algorithm
+        self.recognition_model = self.prepare_recognition(self.active_recognition_model)
+        
+        
+    #INITIALIZE MODELS
+    def prepare_detection(self, active_detection_model):
+        if active_detection_model == self.DETECT_HAAR:
+            model = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        elif active_detection_model == self.DETECT_MOBILE_R50:
+            model = insightface.model_zoo.get_model('retinaface_mnet025_v2')
+            model.prepare(ctx_id = self.use_gpu, nms=0.4)
+        return model
+    
+    def prepare_recognition(self, active_recognition_model):
+        if active_recognition_model==self.RECOGNITION_SHUFFLEFACENET:
+            sym, arg_params, aux_params = mx.model.load_checkpoint('./models/shufflev2-1.5-arcface-retina/model', 42)
+            model = mx.mod.Module(symbol=sym, context=[mx.cpu() if self.use_gpu == -1 else mx.gpu(0)], label_names = None)
+            model.bind(data_shapes=[('data', (1, 3, 112,112))])
+            model.set_params(arg_params,aux_params)
+        return model
+        
+    #PERFORM DETECTION
+    def detectFaces(self, image):
+        if self.active_detection_model == FRP.DETECT_HAAR: 
+            faces = self.detection_model.detectMultiScale(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 1.1, 4)
+            bbox = [(x,y,x+w,y+h) for x,y,w,h in faces]
+            #TODO: get 5 landmarks for haarcascades missing
+            
+        elif self.active_detection_model == FRP.DETECT_MOBILE_R50:
+            #bbox: tuple with 2 opposite rectangle corners where the face is located
+            #landmark: five landmarks of the detected face: 2 eyes, tip of the nose, and 2 lip opposite edges
+            #insightface format
+            bbox, landmarks = self.detection_model.detect(image, threshold=0.5, scale=1.0)
+        
+        bbox_int = bbox.astype(np.int)
+        landmark_int = landmarks.astype(np.int)
+        
+        return bbox_int,landmark_int
+    
+    #PERFORM SINGLE FACE ALIGNMENT
+    def alignFace(self,face_image,landmarks):
+        if self.active_alignment_method == self.ALIGN_INSIGHTFACE:     
+            aligned_face = insightface.utils.face_align.norm_crop(face_image,landmarks)
+        
+        return aligned_face
+    
+    #PERFORM SINGLE FACE RECOGNITION
+    def recognizeFace(self,aligned_face):
+        #receives aligned face and returns similarity index against database
+        if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
+            
+            im_tensor = np.zeros((1, 3, aligned_face.shape[0], aligned_face.shape[1]))
+            for i in range(3):
+                im_tensor[0, i, :, :] = aligned_face[:, :, 2 - i]
+                
+            data = mx.ndarray.array(im_tensor)
+            db = mx.io.DataBatch(data=(data,), provide_data=[('data', data.shape)])
+            self.recognition_model.forward(db, is_train=False)
+                       
+            # Normalize embedding obtained from forward pass to unit vector
+            embedding = self.recognition_model.get_outputs()[0].squeeze()
+            embedding /= embedding.norm()
+            #sim = np.dot(embedding, test_embedding.asnumpy().T)
+            sim_vector = np.dot(embedding.asnumpy(),identity_vectors.T)
+ 
+            best_match = np.argmax(sim_vector)
+            #print("BEST MATCH FOUND AT")
+            #print(sim_vector)
+            #print(best_match)
+            sim = sim_vector[best_match]
+            
+        return sim, best_match
+
+#face recognition pipeline parameters
+use_gpu=False
+detection_algorithm = FRP.DETECT_MOBILE_R50
+alignment_algorithm = FRP.ALIGN_INSIGHTFACE
+recognition_algorithm = FRP.RECOGNITION_SHUFFLEFACENET
+
+fr_pipeline = FRP(use_gpu,detection_algorithm, alignment_algorithm, recognition_algorithm)
+
+
 
 class CameraViewer(QMainWindow):
     def __init__(self):
         super(CameraViewer, self).__init__()
         
+        
         self.saving_capture = False
         self.counter = 0
         
+        #interface handling
         masterWidget = QWidget()
         layout = QGridLayout()
         
@@ -71,12 +174,7 @@ class CameraViewer(QMainWindow):
         layout.addWidget(self.statusLabel,1,0)
         
         masterWidget.setLayout(layout)
-        #self.addDockWidget(Qt.LeftDockWidgetArea,self.dockWidget)
-        #self.addDockWidget(Qt.RightDockWidgetArea,self.dockWidgetRight)
-        
-        #self.setCentralWidget(self.masterLayout)
-        #self.setLayout(self.masterLayout)
-        
+       
         self.setCentralWidget(masterWidget)
         
         self.setWindowTitle("Live Camera Viewer")
@@ -107,8 +205,8 @@ class CameraViewer(QMainWindow):
         
 
     def createActions(self):
-        self.saveAct = QAction("&Toggle Save...", self, shortcut="Ctrl+O",
-                triggered=self.toggleSave)
+        #self.saveAct = QAction("&Toggle Save...", self, shortcut="Ctrl+O",
+        #        triggered=self.toggleSave)
         self.saveEnroll = QAction("&Enroll subject on database...", self, shortcut="Ctrl+1",
                 triggered=self.enrollDatabase)
         
@@ -116,25 +214,22 @@ class CameraViewer(QMainWindow):
         self.demoMenu = QMenu("&Demo", self)
         
         
-        self.demoMenu.addAction(self.saveAct)
+        #self.demoMenu.addAction(self.saveAct)
         self.demoMenu.addAction(self.saveEnroll)
         
         self.menuBar().addMenu(self.demoMenu)
         
-        
+    #MAIN FRAME LOOP    
     def open(self):
         #get data and display
         ret, frame = cap.read()
         
-        #im_bgr = frame[:, :, [2, 1, 0]] #convvert image from pil to opencv BGR
-        #print(im_rgb.shape)
-        #run face detection
-        im_bgr = frame #taken from opencv
+        im_bgr = frame #taken from opencv camera
         
-        #gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        bbox, landmark = model.detect(im_bgr, threshold=0.5, scale=1.0)
-        bbox_int = bbox.astype(np.int)
-        landmark_int = landmark.astype(np.int)
+        #face detection step
+        bbox_int, landmark_int = fr_pipeline.detectFaces(im_bgr)
+        
+        #crop 
         resized_landmarks = copy.deepcopy(landmark_int)
 
         detected_faces = len(bbox_int)
@@ -143,77 +238,63 @@ class CameraViewer(QMainWindow):
         else:
             self.statusLabel.setText("Waiting for faces...")
 
-
+        #iterate
         for face_idx in range(detected_faces):
-            cv2.rectangle(im_bgr,(bbox_int[face_idx][0], bbox_int[face_idx][1]),(bbox_int[face_idx][2],bbox_int[face_idx][3]),(255,0,0),2)
+            corner1 = (bbox_int[face_idx][0],bbox_int[face_idx][1]) #(x,y)
+            corner2 = (bbox_int[face_idx][2],bbox_int[face_idx][3]) #(x,y)
             
+            cv2.rectangle(im_bgr,corner1,corner2,(255,0,0),2)
             
+            #prepare for alignment
+            #crop face area
+            face = im_bgr[corner1[1]:corner2[1],corner1[0]:corner2[0],:]
             
-            face = im_bgr[bbox_int[face_idx][1]:bbox_int[face_idx][3],bbox_int[face_idx][0]:bbox_int[face_idx][2],:]
+            #resize face area
             try:
+                
                 resized_face = cv2.resize(face, (112,112),interpolation=cv2.INTER_AREA)
             except:
                 print("Resize error, continuing,")
                 continue
-            ratio_width = 112.0/float(np.shape(face)[1])
-            ratio_height = 112.0/float(np.shape(face)[0])
-                
+            
+            #warp landmarks to resized face region
+            #112 or 224 used for insightface util alignment
+            ratio_width = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[1]) 
+            ratio_height = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[0])
+            
             cropped_landmarks = copy.deepcopy(landmark_int[face_idx,:,:])
             cropped_landmarks[:,0] = cropped_landmarks[:,0] - min(bbox_int[face_idx][0],bbox_int[face_idx][2])
             cropped_landmarks[:,1] = cropped_landmarks[:,1] - min(bbox_int[face_idx][1],bbox_int[face_idx][3])
                 
-                
             resized_landmarks[face_idx,:,0] = (cropped_landmarks[:,0]*ratio_width).astype(np.int)
             resized_landmarks[face_idx,:,1] = (cropped_landmarks[:,1]*ratio_height).astype(np.int)
                 
-                
-                #for lmk in range(5):
-                #    face = cv2.circle(face,(cropped_landmarks[lmk,0],cropped_landmarks[lmk,1]),10,(0,255,0),2)
-                #    resized_face = cv2.circle(resized_face,(resized_landmarks[face_idx,lmk,0],resized_landmarks[face_idx,lmk,1]),10,(0,255,0),2)
+            #draw landmarks
+            #for lmk in range(5):
+            #    face = cv2.circle(face,(cropped_landmarks[lmk,0],cropped_landmarks[lmk,1]),10,(0,255,0),2)
+            #    resized_face = cv2.circle(resized_face,(resized_landmarks[face_idx,lmk,0],resized_landmarks[face_idx,lmk,1]),10,(0,255,0),2)
                     
-            aligned_face = insightface.utils.face_align.norm_crop(resized_face,resized_landmarks[face_idx,:,:])
-                
-            im_tensor = np.zeros((1, 3, aligned_face.shape[0], aligned_face.shape[1]))
-            for i in range(3):
-                im_tensor[0, i, :, :] = aligned_face[:, :, 2 - i]
-                
-            data = mx.ndarray.array(im_tensor)
-            db = mx.io.DataBatch(data=(data,), provide_data=[('data', data.shape)])
-            model_fr.forward(db, is_train=False)
-                       
-            # Normalise embedding obtained from forward pass to unit vector
-            embedding = model_fr.get_outputs()[0].squeeze()
-            embedding /= embedding.norm()
-            sim = np.dot(embedding.asnumpy(), test_embedding.asnumpy().T)
+            #face alignment step
+            aligned_face = fr_pipeline.alignFace(resized_face,resized_landmarks[face_idx,:,:])
+
+            #face recognition step
+            sim,identity = fr_pipeline.recognizeFace(aligned_face)
                 
             if sim>0.5:
-                cv2.putText(im_bgr, 'Luis Santiago '+str(sim), (bbox_int[face_idx,0],bbox_int[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA) 
+                cv2.putText(im_bgr, labels[identity][1]+ ' ' + str(sim), (bbox_int[face_idx,0],bbox_int[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA) 
                 #print(sim)
             if (self.saving_capture):
                 cv2.imwrite(os.path.join('images',str(num_subjects),str(self.counter)+'.jpg'),face)
-                cv2.imwrite('./images/resized_'+str(self.counter)+'.jpg',resized_face)
-                cv2.imwrite('./images/resized_aligned_'+str(self.counter)+'.jpg',aligned_face)    
+                cv2.imwrite(os.path.join('images',str(num_subjects),'resized_'+str(self.counter)+'.jpg'),resized_face)
+                cv2.imwrite(os.path.join('images',str(num_subjects),'aligned_'+str(self.counter)+'.jpg'),aligned_face) 
                 self.counter+=1
                 if (self.counter==30):
                     self.toggleSave()
-##        faces = face_cascade.detectMultiScale(gray, 1.1, 4) #face detection
-##        for (x, y, w, h) in faces:
-##            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-##            if (self.saving_capture):
-##                im_face_rgb = frame[y:y+h,x:x+w,[2,1,0]]
-##                pilimg_face = PIL.Image.fromarray(im_face_rgb,"RGB")
-##                pilimg_face.save(os.path.join("images",str(num_subjects),(str(self.counter)+".jpeg")))
-##                self.counter+=1
-##                if (self.counter==30):
-##                    self.toggleSave()
+        
+        #convert image from bgr to rgb for GUI handling
         im_rgb = im_bgr[:, :, [2, 1, 0]]    
         pilimg = PIL.Image.fromarray(im_rgb,"RGB")
         image = ImageQt.ImageQt(pilimg)
-        #if(self.saving_capture):
-        #    pilimg.save(str(self.counter)+".jpeg")
-        #    self.counter+=1
-        #    if (self.counter==30):
-        #        self.toggleSave()
             
         if image.isNull():
             QMessageBox.information(self, "Live Camera Viewer","Cannot load camera")
