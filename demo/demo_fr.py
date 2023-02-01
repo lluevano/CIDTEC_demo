@@ -35,7 +35,7 @@ print(labels)
 class FRP: #Face Recognition Pipeline
     #define constants for face detection algorithms
     DETECT_HAAR = 0
-    DETECT_MOBILE_R50 = 1
+    DETECT_MOBILE_MNET = 1
     
     #define constants for alignment
     ALIGN_INSIGHTFACE = 0
@@ -66,7 +66,7 @@ class FRP: #Face Recognition Pipeline
     def prepare_detection(self, active_detection_model):
         if active_detection_model == self.DETECT_HAAR:
             model = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        elif active_detection_model == self.DETECT_MOBILE_R50:
+        elif active_detection_model == self.DETECT_MOBILE_MNET:
             model = insightface.model_zoo.get_model('retinaface_mnet025_v2')
             model.prepare(ctx_id = self.use_gpu, nms=0.4)
         return model
@@ -86,7 +86,7 @@ class FRP: #Face Recognition Pipeline
             bbox = [(x,y,x+w,y+h) for x,y,w,h in faces]
             #TODO: get 5 landmarks for haarcascades missing
             
-        elif self.active_detection_model == FRP.DETECT_MOBILE_R50:
+        elif self.active_detection_model == FRP.DETECT_MOBILE_MNET:
             #bbox: tuple with 2 opposite rectangle corners where the face is located
             #landmark: five landmarks of the detected face: 2 eyes, tip of the nose, and 2 lip opposite edges
             #insightface format
@@ -133,7 +133,7 @@ class FRP: #Face Recognition Pipeline
 
 #face recognition pipeline parameters
 use_gpu=False
-detection_algorithm = FRP.DETECT_MOBILE_R50
+detection_algorithm = FRP.DETECT_MOBILE_MNET
 alignment_algorithm = FRP.ALIGN_INSIGHTFACE
 recognition_algorithm = FRP.RECOGNITION_SHUFFLEFACENET
 
