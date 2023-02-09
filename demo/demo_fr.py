@@ -170,9 +170,9 @@ class CameraViewer(QMainWindow):
             aligned_face = fr_pipeline.alignFace(resized_face,resized_landmarks[face_idx,:,:])
 
             #face recognition step
-            sim, identity = fr_pipeline.recognizeFace(aligned_face)
+            sim, identity = fr_pipeline.recognizeSingleFace(aligned_face)
                 
-            if sim > 0.5:
+            if sim > 0.5: #TODO: Adjust recognition threshold
                 cv2.putText(im_bgr, fr_pipeline.labels[identity][1]+ ' ' + str(sim), (bbox_int[face_idx,0],bbox_int[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA)
                 #print(sim)
             if (self.saving_capture):

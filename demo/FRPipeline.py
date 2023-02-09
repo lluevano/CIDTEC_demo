@@ -11,7 +11,7 @@ class FRP:  # Face Recognition Pipeline
 
     # define constants for alignment
     ALIGN_INSIGHTFACE = 0
-    ALIGNMENT_RESOLUTION = 112.0
+    ALIGNMENT_RESOLUTION = 112
 
     # define constants for face recognition algorithms
     RECOGNITION_SHUFFLEFACENET = 0
@@ -19,7 +19,7 @@ class FRP:  # Face Recognition Pipeline
     def __init__(self, use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm):
         # PREPARE USE CPU OR GPU
         assert isinstance(use_gpu, bool)
-        self.use_gpu = -1 if use_gpu == False else 0
+        self.use_gpu = -1 if not use_gpu else 0
         self.identity_vectors = None
         self.labels = None
 
@@ -34,6 +34,7 @@ class FRP:  # Face Recognition Pipeline
         self.active_recognition_model = recognition_algorithm
         self.recognition_model = self.prepare_recognition(self.active_recognition_model)
 
+        self.identification_threshold = 0.75
 
     # INITIALIZE MODELS
     def prepare_detection(self, active_detection_model):
@@ -57,6 +58,8 @@ class FRP:  # Face Recognition Pipeline
             model = mx.mod.Module(symbol=sym, context=[mx.cpu() if self.use_gpu == -1 else mx.gpu(0)], label_names=None)
             model.bind(data_shapes=[('data', (1, 3, 112, 112))])
             model.set_params(arg_params, aux_params)
+        else:
+            raise f"Model {active_recognition_model} not implemented."
         return model
 
     # PERFORM DETECTION
@@ -80,19 +83,27 @@ class FRP:  # Face Recognition Pipeline
     # PERFORM SINGLE FACE ALIGNMENT
     def alignFace(self, face_image, landmarks):
         if self.active_alignment_method == self.ALIGN_INSIGHTFACE:
-            aligned_face = insightface.utils.face_align.norm_crop(face_image, landmarks)
-
+            aligned_face = insightface.utils.face_align.norm_crop(face_image, landmarks, image_size=FRP.ALIGNMENT_RESOLUTION)
+        else:
+            return None
         return aligned_face
 
     # PERFORM SINGLE FACE RECOGNITION
-    def recognizeFace(self, aligned_face):
+    def recognizeSingleFace(self, aligned_face, format="RGB"):
         # receives aligned face and returns similarity index against database
         if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
 
             im_tensor = np.zeros((1, 3, aligned_face.shape[0], aligned_face.shape[1]))
             for i in range(3):
-                im_tensor[0, i, :, :] = aligned_face[:, :, 2 - i]
+                if format=="RGB":
+                    offset = i
+                elif format=="BGR":
+                    offset = 2 - i
+                else:
+                    raise "Unknown image format"
+                im_tensor[0, i, :, :] = aligned_face[:, :, offset]
 
+            im_tensor = (im_tensor - 127.5) * 0.0078125
             data = mx.ndarray.array(im_tensor)
             db = mx.io.DataBatch(data=(data,), provide_data=[('data', data.shape)])
             self.recognition_model.forward(db, is_train=False)
@@ -110,3 +121,43 @@ class FRP:  # Face Recognition Pipeline
             sim = sim_vector[best_match]
 
         return sim, best_match
+
+    def recognizeBatchFace(self, aligned_faces, format="RGB", batch_size=8):
+        # receives aligned face and returns similarity index against database
+        if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
+            from MxNetEmbedExtractor import MxNetEmbedExtractor
+
+            aligned_faces = (aligned_faces - 127.5) * 0.0078125
+
+            extractor = MxNetEmbedExtractor(self.recognition_model)
+            embeddings = extractor.extract_batch_embedding(aligned_faces, format, batch_size=8)
+
+            # sim = np.dot(embedding, test_embedding.asnumpy().T)
+            sim_vector = np.dot(embeddings, self.identity_vectors.T)
+
+            best_match = np.argmax(sim_vector)
+            # print("BEST MATCH FOUND AT")
+            # print(sim_vector)
+            # print(best_match)
+            sim = sim_vector[best_match]
+
+        return sim, best_match
+
+    def executeFullPipeline(self, img):
+        #Assumes RGB format
+        bbox, lmk = self.detectFaces(img)
+        n_faces = np.shape(bbox)[0]
+
+        aligned_faces=np.zeros((n_faces, FRP.ALIGNMENT_RESOLUTION, FRP.ALIGNMENT_RESOLUTION, 3))
+        for i in range(n_faces):
+            corner1 = (bbox[i][0], bbox[i][1])  # (x,y)
+            corner2 = (bbox[i][2], bbox[i][3])
+            face_img = img[corner1[1]:corner2[1], corner1[0]:corner2[0], :]
+            aligned_faces[i, ...] = self.alignFace(face_img, lmk[i])
+
+        embeddings = self.recognizeBatchFace(aligned_faces)
+        scores = np.dot(embeddings, self.identity_vectors.T)
+        matches = np.argmax(scores, axis=1)
+        np.fromiter((row[index] if row[index] >= self.identification_threshold else -1 for row, index in zip(scores, matches)), dtype=float)
+
+        return embeddings, bbox, lmk
