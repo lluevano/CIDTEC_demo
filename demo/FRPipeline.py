@@ -130,24 +130,34 @@ class FRP:  # Face Recognition Pipeline
             aligned_faces = (aligned_faces - 127.5) * 0.0078125
 
             extractor = MxNetEmbedExtractor(self.recognition_model)
-            embeddings = extractor.extract_batch_embedding(aligned_faces, format, batch_size=8)
+            embeddings = extractor.extract_batch_embedding(aligned_faces, color_format=format, batch_size=8)
 
-            # sim = np.dot(embedding, test_embedding.asnumpy().T)
-            sim_vector = np.dot(embeddings, self.identity_vectors.T)
+            #L2 NORM
+            embeddings = embeddings / np.reshape(np.linalg.norm(embeddings, axis=1, ord=2), (embeddings.shape[0], 1))
 
-            best_match = np.argmax(sim_vector)
-            # print("BEST MATCH FOUND AT")
-            # print(sim_vector)
-            # print(best_match)
-            sim = sim_vector[best_match]
+            #matching
+            scores = np.dot(embeddings, self.identity_vectors.T)
+            matches = np.argmax(scores, axis=1)
 
-        return sim, best_match
+            #TODO: Time-profile best choice
+            final_scores = np.fromiter((row[index] for row, index in
+                         zip(scores, matches)), dtype=float)
+
+            final_ids = np.fromiter(
+                (index if row[index] >= self.identification_threshold else -1 for row, index in
+                 zip(scores, matches)), dtype=float)
+        else:
+            raise f"{self.active_recognition_model} Not yet implemented"
+
+        return final_scores, final_ids, embeddings
 
     def executeFullPipeline(self, img):
         #Assumes RGB format
+        #DETECTION
         bbox, lmk = self.detectFaces(img)
         n_faces = np.shape(bbox)[0]
 
+        #ALIGNMENT
         aligned_faces=np.zeros((n_faces, FRP.ALIGNMENT_RESOLUTION, FRP.ALIGNMENT_RESOLUTION, 3))
         for i in range(n_faces):
             corner1 = (bbox[i][0], bbox[i][1])  # (x,y)
@@ -155,9 +165,7 @@ class FRP:  # Face Recognition Pipeline
             face_img = img[corner1[1]:corner2[1], corner1[0]:corner2[0], :]
             aligned_faces[i, ...] = self.alignFace(face_img, lmk[i])
 
-        embeddings = self.recognizeBatchFace(aligned_faces)
-        scores = np.dot(embeddings, self.identity_vectors.T)
-        matches = np.argmax(scores, axis=1)
-        np.fromiter((row[index] if row[index] >= self.identification_threshold else -1 for row, index in zip(scores, matches)), dtype=float)
+        #RECOGNITION AND MATCHING
+        ids, scores, embeddings = self.recognizeBatchFace(aligned_faces)
 
-        return embeddings, bbox, lmk
+        return ids, scores, embeddings, bbox, lmk
