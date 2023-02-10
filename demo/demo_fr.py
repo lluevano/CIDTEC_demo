@@ -167,7 +167,7 @@ class CameraViewer(QMainWindow):
             #    resized_face = cv2.circle(resized_face,(resized_landmarks[face_idx,lmk,0],resized_landmarks[face_idx,lmk,1]),10,(0,255,0),2)
                     
             #face alignment step
-            aligned_face = fr_pipeline.alignFace(resized_face,resized_landmarks[face_idx,:,:])
+            aligned_face = fr_pipeline.alignCropFace(resized_face, resized_landmarks[face_idx, :, :])
 
             #face recognition step
             sim, identity = fr_pipeline.recognizeSingleFace(aligned_face)

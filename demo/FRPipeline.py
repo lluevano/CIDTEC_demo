@@ -16,11 +16,11 @@ class FRP:  # Face Recognition Pipeline
     # define constants for face recognition algorithms
     RECOGNITION_SHUFFLEFACENET = 0
 
-    def __init__(self, use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm):
+    def __init__(self, use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm, recognition_batch_size=1, db_filename=None):
         # PREPARE USE CPU OR GPU
         assert isinstance(use_gpu, bool)
         self.use_gpu = -1 if not use_gpu else 0
-        self.identity_vectors = None
+        self.biometric_templates = None
         self.labels = None
 
         # LOAD DETECTION MODEL
@@ -32,7 +32,7 @@ class FRP:  # Face Recognition Pipeline
 
         # LOAD RECOGNITION MODEL
         self.active_recognition_model = recognition_algorithm
-        self.recognition_model = self.prepare_recognition(self.active_recognition_model)
+        self.recognition_model = self.prepare_recognition(self.active_recognition_model, recognition_batch_size, db_filename)
 
         self.identification_threshold = 0.75
 
@@ -45,18 +45,18 @@ class FRP:  # Face Recognition Pipeline
             model.prepare(ctx_id=self.use_gpu, nms=0.4)
         return model
 
-    def prepare_recognition(self, active_recognition_model):
+    def prepare_recognition(self, active_recognition_model, recognition_batch_size=1, db_filename=None):
         # load database
-        with open('test_database.pickle', 'rb') as test_emb_file:
-            self.identity_vectors = pickle.load(test_emb_file)
-
-        with open('labels.pickle', 'rb') as label_file:
-            self.labels = pickle.load(label_file)
+        if db_filename:
+            with open(db_filename, 'rb') as db_f_handler:
+                db_pickle = pickle.load(db_f_handler)
+                self.biometric_templates = db_pickle['biometric_templates']
+                self.labels = db_pickle['labels']
 
         if active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
             sym, arg_params, aux_params = mx.model.load_checkpoint('./models/shufflev2-1.5-arcface-retina/model', 42)
             model = mx.mod.Module(symbol=sym, context=[mx.cpu() if self.use_gpu == -1 else mx.gpu(0)], label_names=None)
-            model.bind(data_shapes=[('data', (1, 3, 112, 112))])
+            model.bind(data_shapes=[('data', (recognition_batch_size, 3, 112, 112))])
             model.set_params(arg_params, aux_params)
         else:
             raise f"Model {active_recognition_model} not implemented."
@@ -81,11 +81,11 @@ class FRP:  # Face Recognition Pipeline
         return bbox_int, landmark_int
 
     # PERFORM SINGLE FACE ALIGNMENT
-    def alignFace(self, face_image, landmarks):
+    def alignCropFace(self, face_image, landmarks):
         if self.active_alignment_method == self.ALIGN_INSIGHTFACE:
             aligned_face = insightface.utils.face_align.norm_crop(face_image, landmarks, image_size=FRP.ALIGNMENT_RESOLUTION)
         else:
-            return None
+            raise "Selected alignment method not implemented"
         return aligned_face
 
     # PERFORM SINGLE FACE RECOGNITION
@@ -112,7 +112,7 @@ class FRP:  # Face Recognition Pipeline
             embedding = self.recognition_model.get_outputs()[0].squeeze()
             embedding /= embedding.norm()
             # sim = np.dot(embedding, test_embedding.asnumpy().T)
-            sim_vector = np.dot(embedding.asnumpy(), self.identity_vectors.T)
+            sim_vector = np.dot(embedding.asnumpy(), self.biometric_templates.T)
 
             best_match = np.argmax(sim_vector)
             # print("BEST MATCH FOUND AT")
@@ -122,7 +122,7 @@ class FRP:  # Face Recognition Pipeline
 
         return sim, best_match
 
-    def recognizeBatchFace(self, aligned_faces, format="RGB", batch_size=8):
+    def batch_extract_norm_embeds(self, aligned_faces, format="RGB"):
         # receives aligned face and returns similarity index against database
         if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
             from MxNetEmbedExtractor import MxNetEmbedExtractor
@@ -135,37 +135,46 @@ class FRP:  # Face Recognition Pipeline
             #L2 NORM
             embeddings = embeddings / np.reshape(np.linalg.norm(embeddings, axis=1, ord=2), (embeddings.shape[0], 1))
 
-            #matching
-            scores = np.dot(embeddings, self.identity_vectors.T)
-            matches = np.argmax(scores, axis=1)
-
-            #TODO: Time-profile best choice
-            final_scores = np.fromiter((row[index] for row, index in
-                         zip(scores, matches)), dtype=float)
-
-            final_ids = np.fromiter(
-                (index if row[index] >= self.identification_threshold else -1 for row, index in
-                 zip(scores, matches)), dtype=float)
         else:
             raise f"{self.active_recognition_model} Not yet implemented"
 
-        return final_scores, final_ids, embeddings
+        return embeddings
 
+    def match_scores(self, embeddings):
+        scores = np.dot(embeddings, self.biometric_templates.T)
+        matches = np.argmax(scores, axis=1)
+
+        # TODO: Time-profile best choice
+        final_scores = np.fromiter((row[index] for row, index in
+                                    zip(scores, matches)), dtype=float)
+
+        final_ids = np.fromiter(
+            (index if row[index] >= self.identification_threshold else -1 for row, index in
+             zip(scores, matches)), dtype=float)
+
+        return final_scores, final_ids
     def executeFullPipeline(self, img):
         #Assumes RGB format
         #DETECTION
         bbox, lmk = self.detectFaces(img)
-        n_faces = np.shape(bbox)[0]
 
         #ALIGNMENT
+        n_faces = np.shape(bbox)[0]
+
+        if not n_faces:
+            return None, None, None, None, None
+
         aligned_faces=np.zeros((n_faces, FRP.ALIGNMENT_RESOLUTION, FRP.ALIGNMENT_RESOLUTION, 3))
         for i in range(n_faces):
             corner1 = (bbox[i][0], bbox[i][1])  # (x,y)
             corner2 = (bbox[i][2], bbox[i][3])
             face_img = img[corner1[1]:corner2[1], corner1[0]:corner2[0], :]
-            aligned_faces[i, ...] = self.alignFace(face_img, lmk[i])
+            aligned_faces[i, ...] = self.alignCropFace(face_img, lmk[i])
 
-        #RECOGNITION AND MATCHING
-        ids, scores, embeddings = self.recognizeBatchFace(aligned_faces)
+        #EMBED EXTRACTION
+        embeddings = self.batch_extract_norm_embeds(aligned_faces)
+
+        #MATCHING
+        scores, ids = self.match_scores(embeddings)
 
         return ids, scores, embeddings, bbox, lmk
