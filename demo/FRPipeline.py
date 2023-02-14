@@ -142,7 +142,8 @@ class FRP:  # Face Recognition Pipeline
 
     def match_scores(self, embeddings):
         scores = np.dot(embeddings, self.biometric_templates.T)
-        matches = np.argmax(scores, axis=1)
+        scores = 1-scores
+        matches = np.argmin(scores, axis=1)
 
         # TODO: Time-profile best choice
         final_scores = np.fromiter((row[index] for row, index in
@@ -150,26 +151,31 @@ class FRP:  # Face Recognition Pipeline
 
         final_ids = np.fromiter(
             (index if row[index] >= self.identification_threshold else -1 for row, index in
-             zip(scores, matches)), dtype=float)
+             zip(scores, matches)), dtype=int)
 
         return final_scores, final_ids
-    def executeFullPipeline(self, img):
-        #Assumes RGB format
+    def executeFullPipeline(self, img, format="RGB"):
+        if format=="BGR":
+            img_rgb = np.ascontiguousarray(img[..., ::-1])
+        else:
+            assert format=="RGB"
+            img_rgb = img
+
         #DETECTION
-        bbox, lmk = self.detectFaces(img)
+        bbox, lmk = self.detectFaces(img_rgb)
 
         #ALIGNMENT
         n_faces = np.shape(bbox)[0]
 
         if not n_faces:
-            return None, None, None, None, None
+            return bbox, None, None, None, None
 
         aligned_faces=np.zeros((n_faces, FRP.ALIGNMENT_RESOLUTION, FRP.ALIGNMENT_RESOLUTION, 3))
         for i in range(n_faces):
-            corner1 = (bbox[i][0], bbox[i][1])  # (x,y)
-            corner2 = (bbox[i][2], bbox[i][3])
-            face_img = img[corner1[1]:corner2[1], corner1[0]:corner2[0], :]
-            aligned_faces[i, ...] = self.alignCropFace(face_img, lmk[i])
+            #corner1 = (bbox[i][0], bbox[i][1])  # (x,y)
+            #corner2 = (bbox[i][2], bbox[i][3])
+            #face_img = img_rgb[corner1[1]:corner2[1], corner1[0]:corner2[0], :]
+            aligned_faces[i, ...] = self.alignCropFace(img_rgb, lmk[i])
 
         #EMBED EXTRACTION
         embeddings = self.batch_extract_norm_embeds(aligned_faces)
@@ -177,4 +183,4 @@ class FRP:  # Face Recognition Pipeline
         #MATCHING
         scores, ids = self.match_scores(embeddings)
 
-        return ids, scores, embeddings, bbox, lmk
+        return bbox, lmk, ids, scores, embeddings

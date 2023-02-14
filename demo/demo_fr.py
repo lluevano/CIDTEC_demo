@@ -24,12 +24,12 @@ cap = cv2.VideoCapture(0)
 num_subjects = 0
 
 #face recognition pipeline parameters
-use_gpu=False
+use_gpu=True
 detection_algorithm = FRP.DETECT_MOBILE_MNET
 alignment_algorithm = FRP.ALIGN_INSIGHTFACE
 recognition_algorithm = FRP.RECOGNITION_SHUFFLEFACENET
 
-fr_pipeline = FRP(use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm)
+fr_pipeline = FRP(use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm,db_filename="new_test_database.pickle")
 
 
 
@@ -117,14 +117,18 @@ class CameraViewer(QMainWindow):
         ret, frame = cap.read()
         
         im_bgr = frame #taken from opencv camera
-        
-        #face detection step
-        bbox_int, landmark_int = fr_pipeline.detectFaces(im_bgr)
-        
-        #crop 
-        resized_landmarks = copy.deepcopy(landmark_int)
 
-        detected_faces = len(bbox_int)
+        #full pipeline
+        bbox, lmk, ids, scores, embeddings = fr_pipeline.executeFullPipeline(im_bgr, format="BGR")
+
+        #face detection step
+
+
+        #crop
+        resized_landmarks = copy.deepcopy(lmk)
+
+        detected_faces = bbox.shape[0]
+
         if detected_faces:
             self.statusLabel.setText("Detecting " + str(detected_faces) + (" face!" if (detected_faces == 1) else " faces!"))
         else:
@@ -132,34 +136,34 @@ class CameraViewer(QMainWindow):
 
         #iterate
         for face_idx in range(detected_faces):
-            corner1 = (bbox_int[face_idx][0],bbox_int[face_idx][1]) #(x,y)
-            corner2 = (bbox_int[face_idx][2],bbox_int[face_idx][3]) #(x,y)
+            corner1 = (bbox[face_idx][0],bbox[face_idx][1]) #(x,y)
+            corner2 = (bbox[face_idx][2],bbox[face_idx][3]) #(x,y)
             
             cv2.rectangle(im_bgr,corner1,corner2,(255,0,0),2)
             
             #prepare for alignment
             #crop face area
-            face = im_bgr[corner1[1]:corner2[1],corner1[0]:corner2[0],:]
+            #face = im_bgr[corner1[1]:corner2[1],corner1[0]:corner2[0],:]
             
             #resize face area
-            try:
+            #try:
                 
-                resized_face = cv2.resize(face, (112,112),interpolation=cv2.INTER_AREA)
-            except:
-                print("Resize error, continuing,")
-                continue
+            #    resized_face = cv2.resize(face, (112,112),interpolation=cv2.INTER_AREA)
+            #except:
+            #    print("Resize error, continuing,")
+            #    continue
             
             #warp landmarks to resized face region
             #112 or 224 used for insightface util alignment
-            ratio_width = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[1]) 
-            ratio_height = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[0])
+            #ratio_width = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[1])
+            #ratio_height = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[0])
             
-            cropped_landmarks = copy.deepcopy(landmark_int[face_idx,:,:])
-            cropped_landmarks[:,0] = cropped_landmarks[:,0] - min(bbox_int[face_idx][0],bbox_int[face_idx][2])
-            cropped_landmarks[:,1] = cropped_landmarks[:,1] - min(bbox_int[face_idx][1],bbox_int[face_idx][3])
+            #cropped_landmarks = copy.deepcopy(lmk[face_idx,:,:])
+            #cropped_landmarks[:,0] = cropped_landmarks[:,0] - min(bbox[face_idx][0],bbox[face_idx][2])
+            #cropped_landmarks[:,1] = cropped_landmarks[:,1] - min(bbox[face_idx][1],bbox[face_idx][3])
                 
-            resized_landmarks[face_idx,:,0] = (cropped_landmarks[:,0]*ratio_width).astype(np.int)
-            resized_landmarks[face_idx,:,1] = (cropped_landmarks[:,1]*ratio_height).astype(np.int)
+            #resized_landmarks[face_idx,:,0] = (cropped_landmarks[:,0]*ratio_width).astype(np.int)
+            #resized_landmarks[face_idx,:,1] = (cropped_landmarks[:,1]*ratio_height).astype(np.int)
                 
             #draw landmarks
             #for lmk in range(5):
@@ -167,18 +171,20 @@ class CameraViewer(QMainWindow):
             #    resized_face = cv2.circle(resized_face,(resized_landmarks[face_idx,lmk,0],resized_landmarks[face_idx,lmk,1]),10,(0,255,0),2)
                     
             #face alignment step
-            aligned_face = fr_pipeline.alignCropFace(resized_face, resized_landmarks[face_idx, :, :])
+            #aligned_face = fr_pipeline.alignCropFace(resized_face, resized_landmarks[face_idx, :, :])
 
             #face recognition step
-            sim, identity = fr_pipeline.recognizeSingleFace(aligned_face)
-                
-            if sim > 0.5: #TODO: Adjust recognition threshold
-                cv2.putText(im_bgr, fr_pipeline.labels[identity][1]+ ' ' + str(sim), (bbox_int[face_idx,0],bbox_int[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA)
+            #sim, identity = fr_pipeline.recognizeSingleFace(aligned_face)
+            sim = scores[face_idx]
+            identity = ids[face_idx]
+
+            if identity != -1: #TODO: Adjust recognition threshold
+                cv2.putText(im_bgr, fr_pipeline.labels[identity][1]+ ' ' + str(sim), (bbox[face_idx,0],bbox[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA)
                 #print(sim)
             if (self.saving_capture):
-                cv2.imwrite(os.path.join('images',str(num_subjects),str(self.counter)+'.jpg'),face)
-                cv2.imwrite(os.path.join('images',str(num_subjects),'resized_'+str(self.counter)+'.jpg'),resized_face)
-                cv2.imwrite(os.path.join('images',str(num_subjects),'aligned_'+str(self.counter)+'.jpg'),aligned_face) 
+                #cv2.imwrite(os.path.join('images',str(num_subjects),str(self.counter)+'.jpg'),face)
+                #cv2.imwrite(os.path.join('images',str(num_subjects),'resized_'+str(self.counter)+'.jpg'),resized_face)
+                #cv2.imwrite(os.path.join('images',str(num_subjects),'aligned_'+str(self.counter)+'.jpg'),aligned_face)
                 self.counter+=1
                 if (self.counter==30):
                     self.toggleSave()
