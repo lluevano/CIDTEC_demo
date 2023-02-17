@@ -3,6 +3,8 @@ import numpy as np
 import mxnet as mx
 import insightface
 import pickle
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import pairwise_distances
 
 class FRP:  # Face Recognition Pipeline
     # define constants for face detection algorithms
@@ -16,7 +18,7 @@ class FRP:  # Face Recognition Pipeline
     # define constants for face recognition algorithms
     RECOGNITION_SHUFFLEFACENET = 0
 
-    def __init__(self, use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm, recognition_batch_size=1, db_filename=None):
+    def __init__(self, use_gpu, detection_algorithm, alignment_algorithm, recognition_algorithm, recognition_batch_size=4, db_filename=None):
         # PREPARE USE CPU OR GPU
         assert isinstance(use_gpu, bool)
         self.use_gpu = -1 if not use_gpu else 0
@@ -127,13 +129,14 @@ class FRP:  # Face Recognition Pipeline
         if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
             from MxNetEmbedExtractor import MxNetEmbedExtractor
 
-            aligned_faces = (aligned_faces - 127.5) * 0.0078125
+            #aligned_faces = (aligned_faces - 127.5) / 128.0#* 0.0078125
 
             extractor = MxNetEmbedExtractor(self.recognition_model)
             embeddings = extractor.extract_batch_embedding(aligned_faces, color_format=format, batch_size=8)
 
             #L2 NORM
-            embeddings = embeddings / np.reshape(np.linalg.norm(embeddings, axis=1, ord=2), (embeddings.shape[0], 1))
+            embeddings = normalize(embeddings)
+            #embeddings = embeddings / np.reshape(np.linalg.norm(embeddings, axis=1, ord=2), (embeddings.shape[0], 1))
 
         else:
             raise f"{self.active_recognition_model} Not yet implemented"
@@ -142,8 +145,8 @@ class FRP:  # Face Recognition Pipeline
 
     def match_scores(self, embeddings):
         scores = np.dot(embeddings, self.biometric_templates.T)
-        scores = 1-scores
-        matches = np.argmin(scores, axis=1)
+        #scores = pairwise_distances(embeddings,self.biometric_templates, metric='sqeuclidean')
+        matches = np.argmax(scores, axis=1)
 
         # TODO: Time-profile best choice
         final_scores = np.fromiter((row[index] for row, index in
@@ -170,12 +173,12 @@ class FRP:  # Face Recognition Pipeline
         if not n_faces:
             return bbox, None, None, None, None
 
-        aligned_faces=np.zeros((n_faces, FRP.ALIGNMENT_RESOLUTION, FRP.ALIGNMENT_RESOLUTION, 3))
+        aligned_faces=np.zeros((n_faces, FRP.ALIGNMENT_RESOLUTION, FRP.ALIGNMENT_RESOLUTION, 3),dtype=np.float32)
         for i in range(n_faces):
             #corner1 = (bbox[i][0], bbox[i][1])  # (x,y)
             #corner2 = (bbox[i][2], bbox[i][3])
             #face_img = img_rgb[corner1[1]:corner2[1], corner1[0]:corner2[0], :]
-            aligned_faces[i, ...] = self.alignCropFace(img_rgb, lmk[i])
+            aligned_faces[i, ...] = cv2.cvtColor(self.alignCropFace(img_rgb, lmk[i]),cv2.COLOR_RGB2BGR)
 
         #EMBED EXTRACTION
         embeddings = self.batch_extract_norm_embeds(aligned_faces)

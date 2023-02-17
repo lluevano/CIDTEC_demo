@@ -14,7 +14,7 @@ class MxNetEmbedExtractor:
         else:
             assert color_format == "RGB", "Only RGB and BGR formats are supported"
 
-        img_batch = np.transpose(img_batch, (0, 3, 1, 2)) # to NxCxHxW
+        img_batch = np.transpose(img_batch, (0, 3, 1, 2)).astype(np.float32) # to NxCxHxW
 
         feat_size = self.feat_size
 
