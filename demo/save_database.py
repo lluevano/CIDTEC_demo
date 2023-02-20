@@ -45,14 +45,15 @@ for subject_id,folder in enumerate(database_folders):
  #   model.bind(data_shapes=[('data', (images.shape[0], 3, 112,112))], force_rebind=True)
  #   model.set_params(arg_params,aux_params)
 
-    embeddings = fr_pipeline.batch_extract_norm_embeds(im_tensor)
-    embeddings_flip = fr_pipeline.batch_extract_norm_embeds(np.flip(im_tensor,axis=2))
+    embeddings = fr_pipeline.batch_extract_norm_embeds(im_tensor, scale_faces=False)
+    embeddings_flip = fr_pipeline.batch_extract_norm_embeds(np.flip(im_tensor,axis=2), scale_faces=False)
 
     #print(folder[folder.find('/')+1:])
     #print(len(embeddings))
     #print(embeddings)
     sum_emb = np.sum(np.concatenate((embeddings,embeddings_flip)), axis=0).reshape((1,embeddings.shape[-1]))
-    sum_emb = normalize(sum_emb)
+    sum_emb = sum_emb / float(embeddings.shape[0])
+    #sum_emb = normalize(sum_emb)
 
     #model._reset_bind()
     #print(sum_emb)

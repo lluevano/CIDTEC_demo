@@ -26,7 +26,6 @@ class MxNetEmbedExtractor:
         for i, batch in enumerate(data_iter):
             self.model.forward(batch, is_train=False)
             embeddings = self.model.get_outputs()[0]
-            #embeddings = mx.ndarray.L2Normalization(embeddings)
             if (i+1) == total_batches:
                 final_tail = (i*batch_size)+remainder if remainder else None
                 tail = remainder if remainder else None

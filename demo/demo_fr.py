@@ -47,7 +47,8 @@ class CameraViewer(QMainWindow):
         
         
         l1 = QLabel()
-        l1.setText("List of identities")
+
+        l1.setText("List of identities \n" + '\n'.join(list(fr_pipeline.labels[:,1])))
         l1.setAlignment(Qt.AlignCenter)
         self.statusLabel = QLabel()
         self.statusLabel.setText("Waiting for faces...")
@@ -141,18 +142,6 @@ class CameraViewer(QMainWindow):
             
             cv2.rectangle(im_bgr,corner1,corner2,(255,0,0),2)
             
-            #prepare for alignment
-            #crop face area
-            #face = im_bgr[corner1[1]:corner2[1],corner1[0]:corner2[0],:]
-            
-            #resize face area
-            #try:
-                
-            #    resized_face = cv2.resize(face, (112,112),interpolation=cv2.INTER_AREA)
-            #except:
-            #    print("Resize error, continuing,")
-            #    continue
-            
             #warp landmarks to resized face region
             #112 or 224 used for insightface util alignment
             #ratio_width = FRP.ALIGNMENT_RESOLUTION/float(np.shape(face)[1])
@@ -179,7 +168,7 @@ class CameraViewer(QMainWindow):
             identity = ids[face_idx]
 
             if identity != -1: #TODO: Adjust recognition threshold
-                cv2.putText(im_bgr, fr_pipeline.labels[identity][1]+ ' ' + str(sim), (bbox[face_idx,0],bbox[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA)
+                cv2.putText(im_bgr, fr_pipeline.labels[identity][1]+ ' ' + str(round(sim,3)), (bbox[face_idx,0],bbox[face_idx,1]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2, cv2.LINE_AA)
                 #print(sim)
             if (self.saving_capture):
                 #cv2.imwrite(os.path.join('images',str(num_subjects),str(self.counter)+'.jpg'),face)

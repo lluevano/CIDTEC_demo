@@ -36,7 +36,7 @@ class FRP:  # Face Recognition Pipeline
         self.active_recognition_model = recognition_algorithm
         self.recognition_model = self.prepare_recognition(self.active_recognition_model, recognition_batch_size, db_filename)
 
-        self.identification_threshold = 0.75
+        self.identification_threshold = 0
 
     # INITIALIZE MODELS
     def prepare_detection(self, active_detection_model):
@@ -90,46 +90,12 @@ class FRP:  # Face Recognition Pipeline
             raise "Selected alignment method not implemented"
         return aligned_face
 
-    # PERFORM SINGLE FACE RECOGNITION
-    def recognizeSingleFace(self, aligned_face, format="RGB"):
-        # receives aligned face and returns similarity index against database
-        if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
-
-            im_tensor = np.zeros((1, 3, aligned_face.shape[0], aligned_face.shape[1]))
-            for i in range(3):
-                if format=="RGB":
-                    offset = i
-                elif format=="BGR":
-                    offset = 2 - i
-                else:
-                    raise "Unknown image format"
-                im_tensor[0, i, :, :] = aligned_face[:, :, offset]
-
-            im_tensor = (im_tensor - 127.5) * 0.0078125
-            data = mx.ndarray.array(im_tensor)
-            db = mx.io.DataBatch(data=(data,), provide_data=[('data', data.shape)])
-            self.recognition_model.forward(db, is_train=False)
-
-            # Normalize embedding obtained from forward pass to unit vector
-            embedding = self.recognition_model.get_outputs()[0].squeeze()
-            embedding /= embedding.norm()
-            # sim = np.dot(embedding, test_embedding.asnumpy().T)
-            sim_vector = np.dot(embedding.asnumpy(), self.biometric_templates.T)
-
-            best_match = np.argmax(sim_vector)
-            # print("BEST MATCH FOUND AT")
-            # print(sim_vector)
-            # print(best_match)
-            sim = sim_vector[best_match]
-
-        return sim, best_match
-
-    def batch_extract_norm_embeds(self, aligned_faces, format="RGB"):
+    def batch_extract_norm_embeds(self, aligned_faces, format="RGB", scale_faces=True):
         # receives aligned face and returns similarity index against database
         if self.active_recognition_model == self.RECOGNITION_SHUFFLEFACENET:
             from MxNetEmbedExtractor import MxNetEmbedExtractor
 
-            #aligned_faces = (aligned_faces - 127.5) / 128.0#* 0.0078125
+            aligned_faces = ((aligned_faces - 127.5) * 0.0078125) if scale_faces else aligned_faces
 
             extractor = MxNetEmbedExtractor(self.recognition_model)
             embeddings = extractor.extract_batch_embedding(aligned_faces, color_format=format, batch_size=8)
@@ -144,8 +110,8 @@ class FRP:  # Face Recognition Pipeline
         return embeddings
 
     def match_scores(self, embeddings):
-        scores = np.dot(embeddings, self.biometric_templates.T)
-        #scores = pairwise_distances(embeddings,self.biometric_templates, metric='sqeuclidean')
+        #scores = np.dot(embeddings, self.biometric_templates.T)/(np.linalg.norm(embeddings)*np.linalg.norm(self.biometric_templates))
+        scores = 1 - pairwise_distances(embeddings,self.biometric_templates, metric='cosine')
         matches = np.argmax(scores, axis=1)
 
         # TODO: Time-profile best choice
@@ -181,7 +147,7 @@ class FRP:  # Face Recognition Pipeline
             aligned_faces[i, ...] = cv2.cvtColor(self.alignCropFace(img_rgb, lmk[i]),cv2.COLOR_RGB2BGR)
 
         #EMBED EXTRACTION
-        embeddings = self.batch_extract_norm_embeds(aligned_faces)
+        embeddings = self.batch_extract_norm_embeds(aligned_faces, scale_faces=False)
 
         #MATCHING
         scores, ids = self.match_scores(embeddings)
